@@ -22,43 +22,40 @@ namespace :sidekiq do
   desc 'Restart Sidekiq (Quiet, Wait till workers finish or 30 seconds, Stop, Start)'
   task :restart do
     on roles fetch(:sidekiq_roles) do |role|
-      git_plugin.switch_user(role) do
-        git_plugin.quiet_sidekiq
-        git_plugin.process_block do |process|
-          start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          running = nil
-
-          # get running workers
-          while (running.nil? || running > 0) && git_plugin.duration(start_time) < 30 do
+      on roles fetch(:sidekiq_roles) do |role|
+        git_plugin.switch_user(role) do
+          active_process = nil
+          inactive_process = nil
+          [1, 2].each do |process|
             command_args =
               if fetch(:sidekiq_service_unit_user) == :system
-                [:sudo, 'systemd-cgls']
+                [:sudo, "systemctl"]
               else
-                ['systemd-cgls', '--user']
+                ["systemctl", "--user"]
               end
-            # need to pipe through tr -cd... to strip out systemd colors or you
-            # get log error messages for non UTF-8 characters.
-            command_args.push(
-              '-u', "#{git_plugin.sidekiq_service_unit_name(process: process)}.service",
-              '|', 'tr -cd \'\11\12\15\40-\176\''
-            )
+
+            command_args.push(:status, git_plugin.sidekiq_service_unit_name(process: process))
             status = capture(*command_args, raise_on_non_zero_exit: false)
-            status_match = status.match(/\[(?<running>\d+) of (?<total>\d+) busy\]/)
-            break unless status_match
 
-            running = status_match[:running]&.to_i
+            active_status_match = status.match(/Active: active/)
+            inactive_status_match = status.match(/Active: inactive/)
 
-            colors = SSHKit::Color.new($stdout)
-            if running.zero?
-              info colors.colorize("✔ Process ##{process}: No running workers. Shutting down for restart!", :green)
+            if active_status_match
+              active_process = process
+            elsif inactive_status_match
+              inactive_process = process
             else
-              info colors.colorize("⧗ Process ##{process}: Waiting for #{running} workers.", :yellow)
-              sleep(1)
+              info colors.colorize("Process ##{process} status not match: #{status}", :red)
             end
           end
 
-          git_plugin.systemctl_command(:stop, process: process)
-          git_plugin.systemctl_command(:start, process: process)
+          if [active_process, inactive_process].any?(&:nil?)
+            info colors.colorize("You should manually restart sidekiq", :red)
+            return
+          end
+          info colors.colorize("Quiet Process ##{active_process}, Start Process ##{inactive_process}", :green)
+          git_plugin.quiet_sidekiq(process: active_process)
+          git_plugin.systemctl_command(:start, process: inactive_process)
         end
       end
     end
@@ -200,25 +197,28 @@ namespace :sidekiq do
     backend.execute :rm, config_link_path, raise_on_non_zero_exit: false
   end
 
+  def sidekiq_service_unit_name(process: nil)
+    if process > 1
+      "#{fetch(:sidekiq_service_unit_name)}_#{process}"
+    else
+      fetch(:sidekiq_service_unit_name)
+    end
+  end
+
   def systemctl_command(*args, process: nil)
     execute_array =
       if fetch(:sidekiq_service_unit_user) == :system
         %i[sudo systemctl]
       else
-        [:systemctl, '--user']
+        [:systemctl, "--user"]
       end
-    if process && sidekiq_processes > 1
-      execute_array.push(
-        *args, sidekiq_service_unit_name(process: process)
-        ).flatten
-    else
-      execute_array.push(*args, sidekiq_service_unit_name).flatten
-    end
+
+    execute_array.push(*args, sidekiq_service_unit_name(process: process)).flatten
     backend.execute(*execute_array, raise_on_non_zero_exit: false)
   end
 
-  def quiet_sidekiq
-    systemctl_command(:kill, '-s', :TSTP)
+  def quiet_sidekiq(process: nil)
+    systemctl_command(:kill, "-s", :TSTP, process: process)
   end
 
   def switch_user(role, &block)
@@ -264,14 +264,6 @@ namespace :sidekiq do
   def sidekiq_service_file_name(index = nil)
     return "#{fetch(:sidekiq_service_unit_name)}.service" if index.to_i.zero?
     "#{fetch(:sidekiq_service_unit_name)}@#{index}.service"
-  end
-
-  def sidekiq_service_unit_name(process: nil)
-    if process && sidekiq_processes > 1
-      "#{fetch(:sidekiq_service_unit_name)}@#{process}"
-    else
-      fetch(:sidekiq_service_unit_name)
-    end
   end
 
   # process = 1 | sidekiq_systemd_1.yaml
