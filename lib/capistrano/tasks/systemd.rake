@@ -19,7 +19,7 @@ namespace :sidekiq do
     end
   end
 
-  desc 'Restart Sidekiq (Quiet, Wait till workers finish or 30 seconds, Stop, Start)'
+  desc 'Custom Restart Sidekiq (Quiet Active service and start inactive service'
   task :restart do
     on roles fetch(:sidekiq_roles) do |role|
       on roles fetch(:sidekiq_roles) do |role|
