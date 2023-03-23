@@ -26,6 +26,8 @@ namespace :sidekiq do
         git_plugin.switch_user(role) do
           active_process = nil
           inactive_process = nil
+          colors = SSHKit::Color.new($stdout)
+
           [1, 2].each do |process|
             command_args =
               if fetch(:sidekiq_service_unit_user) == :system
