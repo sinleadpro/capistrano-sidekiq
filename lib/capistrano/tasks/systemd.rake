@@ -1,3 +1,4 @@
+# encoding: UTF-8
 # frozen_string_literal: true
 
 git_plugin = self
@@ -113,7 +114,7 @@ namespace :sidekiq do
       end
 
       if fetch(:systemctl_user) && fetch(:sidekiq_lingering_user)
-        execute :loginctl, "enable-linger", fetch(:puma_lingering_user)
+        execute :loginctl, "enable-linger", fetch(:sidekiq_lingering_user)
       end
     end
   end
@@ -128,7 +129,7 @@ namespace :sidekiq do
   end
 
   def fetch_systemd_unit_path
-    if fetch(:puma_systemctl_user) == :system
+    if fetch(:sidekiq_systemctl_user) == :system
       "/etc/systemd/system/"
     else
       home_dir = backend.capture :pwd
